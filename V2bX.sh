@@ -308,15 +308,18 @@ install_bbr() {
 }
 
 update_shell() {
-    wget -O /usr/bin/V2bX -N --no-check-certificate https://raw.githubusercontent.com/ChampagneA7/V2bX-script/master/V2bX.sh
-    if [[ $? != 0 ]]; then
-        echo ""
-        echo -e "${red}下载脚本失败，请检查本机能否连接 Github${plain}"
-        before_show_menu
-    else
-        chmod +x /usr/bin/V2bX
-        echo -e "${green}升级脚本成功，请重新运行脚本${plain}" && exit 0
+    local target=/usr/bin/V2bX pending
+    if [[ -L $target ]]; then target=$(readlink -f "$target") || return 1; fi
+    pending=$(mktemp "${target}.upgrade.XXXXXXXX") || return 1
+    if ! curl -fLsS --retry 3 --connect-timeout 15 --max-time 180 \
+        -o "$pending" https://raw.githubusercontent.com/ChampagneA7/V2bX-script/master/V2bX.sh \
+        || ! bash -n "$pending"; then
+        rm -f "$pending"
+        echo -e "${red}下载或校验管理脚本失败，现有脚本未改动${plain}"
+        return 1
     fi
+    chmod 755 "$pending" && mv -f "$pending" "$target" || { rm -f "$pending"; return 1; }
+    echo -e "${green}升级脚本成功，请重新运行脚本${plain}"
 }
 
 # 0: running, 1: not running, 2: not installed
