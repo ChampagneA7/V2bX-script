@@ -10,6 +10,26 @@ cur_dir=$(pwd)
 # check root
 [[ $EUID -ne 0 ]] && echo -e "${red}错误：${plain} 必须使用root用户运行此脚本！\n" && exit 1
 
+# Existing installations always use the configuration-preserving upgrade path.
+if [[ -x /usr/local/V2bX/V2bX ]]; then
+    upgrade_script=$(mktemp) || exit 1
+    if ! curl -fLsS --retry 3 --connect-timeout 15 --max-time 180 \
+        -o "$upgrade_script" https://raw.githubusercontent.com/ChampagneA7/V2bX-script/master/upgrade.sh; then
+        rm -f "$upgrade_script"
+        echo -e "${red}下载升级脚本失败，现有安装未改动${plain}"
+        exit 1
+    fi
+    if ! bash -n "$upgrade_script"; then
+        rm -f "$upgrade_script"
+        echo -e "${red}升级脚本语法无效，现有安装未改动${plain}"
+        exit 1
+    fi
+    bash "$upgrade_script" "${1:-}"
+    result=$?
+    rm -f "$upgrade_script"
+    exit "$result"
+fi
+
 # check os
 if [[ -f /etc/redhat-release ]]; then
     release="centos"
@@ -132,22 +152,22 @@ install_V2bX() {
     cd /usr/local/V2bX/
 
     if  [ $# == 0 ] ;then
-        last_version=$(curl -Ls "https://api.github.com/repos/wyx2685/V2bX/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        last_version=$(curl -fLsS "https://api.github.com/repos/ChampagneA7/V2bX/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
         if [[ ! -n "$last_version" ]]; then
             echo -e "${red}检测 V2bX 版本失败，可能是超出 Github API 限制，请稍后再试，或手动指定 V2bX 版本安装${plain}"
             exit 1
         fi
         echo -e "检测到 V2bX 最新版本：${last_version}，开始安装"
-        wget --no-check-certificate -N --progress=bar -O /usr/local/V2bX/V2bX-linux.zip https://github.com/wyx2685/V2bX/releases/download/${last_version}/V2bX-linux-${arch}.zip
+        wget -N --progress=bar -O /usr/local/V2bX/V2bX-linux.zip https://github.com/ChampagneA7/V2bX/releases/download/${last_version}/V2bX-linux-${arch}.zip
         if [[ $? -ne 0 ]]; then
             echo -e "${red}下载 V2bX 失败，请确保你的服务器能够下载 Github 的文件${plain}"
             exit 1
         fi
     else
         last_version=$1
-        url="https://github.com/wyx2685/V2bX/releases/download/${last_version}/V2bX-linux-${arch}.zip"
+        url="https://github.com/ChampagneA7/V2bX/releases/download/${last_version}/V2bX-linux-${arch}.zip"
         echo -e "开始安装 V2bX $1"
-        wget --no-check-certificate -N --progress=bar -O /usr/local/V2bX/V2bX-linux.zip ${url}
+        wget -N --progress=bar -O /usr/local/V2bX/V2bX-linux.zip ${url}
         if [[ $? -ne 0 ]]; then
             echo -e "${red}下载 V2bX $1 失败，请确保此版本存在${plain}"
             exit 1
@@ -273,7 +293,6 @@ EOF
     echo "V2bX uninstall    - 卸载 V2bX"
     echo "V2bX version      - 查看 V2bX 版本"
     echo "------------------------------------------"
-    curl -fsS --max-time 10 "https://api.v-50.me/counter_v2bx" || true
     # 首次安装询问是否生成配置文件
     if [[ $first_install == true ]]; then
         read -rp "检测到你为第一次安装V2bX,是否自动直接生成配置文件？(y/n): " if_generate

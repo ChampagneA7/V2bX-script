@@ -1,0 +1,28 @@
+name: Upgrade safety tests
+
+on:
+  push:
+    paths:
+      - '*.sh'
+      - 'tests/**'
+      - '.github/workflows/test-upgrade.yml'
+  pull_request:
+    paths:
+      - '*.sh'
+      - 'tests/**'
+      - '.github/workflows/test-upgrade.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: |
+          for file in upgrade.sh install.sh V2bX.sh tests/*.sh; do bash -n "$file"; done
+      - name: Exercise upgrades and rollback with unchanged configuration
+        run: bash tests/upgrade_test.sh

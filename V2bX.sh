@@ -107,20 +107,28 @@ install() {
 }
 
 update() {
+    local upgrade_script result
     if [[ $# == 0 ]]; then
         echo && echo -n -e "输入指定版本(默认最新版): " && read version
     else
-        version=$2
+        version=${2:-}
     fi
-    bash <(curl -Ls https://raw.githubusercontent.com/ChampagneA7/V2bX-script/master/install.sh) $version
-    if [[ $? == 0 ]]; then
-        echo -e "${green}更新完成，已自动重启 V2bX，请使用 V2bX log 查看运行日志${plain}"
-        exit
+    upgrade_script=$(mktemp) || return 1
+    if ! curl -fLsS --retry 3 --connect-timeout 15 --max-time 180 \
+        -o "$upgrade_script" https://raw.githubusercontent.com/ChampagneA7/V2bX-script/master/upgrade.sh; then
+        rm -f "$upgrade_script"
+        echo -e "${red}下载升级脚本失败，现有安装未改动${plain}"
+        return 1
     fi
-
-    if [[ $# == 0 ]]; then
-        before_show_menu
+    if ! bash -n "$upgrade_script"; then
+        rm -f "$upgrade_script"
+        echo -e "${red}升级脚本语法无效，现有安装未改动${plain}"
+        return 1
     fi
+    bash "$upgrade_script" "$version"
+    result=$?
+    rm -f "$upgrade_script"
+    return "$result"
 }
 
 config() {
@@ -962,7 +970,7 @@ show_usage() {
 show_menu() {
     echo -e "
   ${green}V2bX 后端管理脚本，${plain}${red}不适用于docker${plain}
---- https://github.com/wyx2685/V2bX ---
+--- https://github.com/ChampagneA7/V2bX ---
   ${green}0.${plain} 修改配置
 ————————————————
   ${green}1.${plain} 安装 V2bX
