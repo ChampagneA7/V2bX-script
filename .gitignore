@@ -1,0 +1,2 @@
+# Local review builds and isolated test fixtures.
+.test-tmp/

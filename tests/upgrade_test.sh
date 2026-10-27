@@ -8,8 +8,10 @@ trap '[[ $work_dir == "$test_tmp_root"/v2bx-upgrade-tests.* && -d $work_dir ]] &
 fixture_dir="$work_dir/fixtures"
 mkdir -p "$fixture_dir"
 node "$test_dir/make_fixture.mjs" "$fixture_dir/archive.zip"
+node "$test_dir/make_fixture.mjs" "$fixture_dir/legacy.zip" legacy
+node "$test_dir/make_fixture.mjs" "$fixture_dir/bad-manager.zip" bad-manager
 printf '#!/usr/bin/env bash\necho new-manager\n' > "$fixture_dir/manager.sh"
-scenarios=(success stopped download-failure checksum-failure startup-failure concurrent-upgrade)
+scenarios=(success stopped download-failure checksum-failure startup-failure concurrent-upgrade readiness-timeout readiness-lost stop-failure rollback-stop-failure manager-replacement-failure legacy-package bad-manager)
 ln -s "$fixture_dir/manager.sh" "$work_dir/symlink-probe"
 if [[ -L $work_dir/symlink-probe ]]; then
     scenarios+=(symlink-manager)
@@ -35,6 +37,7 @@ for scenario in "${scenarios[@]}"; do
     printf 'existing-private-key\n' > "$case_dir/config/cert.key"
     printf 'existing-geo-database\n' > "$case_dir/install/geoip.dat"
     printf '1\n' > "$case_dir/service-state"
+    printf 'old\n' > "$case_dir/running-version"
     [[ $scenario != stopped ]] || printf '0\n' > "$case_dir/service-state"
     [[ $scenario != concurrent-upgrade ]] || mkdir "$case_dir/install/.upgrade.lock"
     fingerprint_before=$(find "$case_dir/config" -type f -exec sha256sum {} \;)
@@ -42,7 +45,7 @@ for scenario in "${scenarios[@]}"; do
     set +e
     TEST_ROOT="$case_dir" TEST_CASE="$scenario" FIXTURE_DIR="$fixture_dir" \
         V2BX_INSTALL_DIR="$case_dir/install" V2BX_CONFIG_DIR="$case_dir/config" \
-        V2BX_MANAGER_PATH="$case_dir/bin/V2bX" UPGRADE_PATH="$test_dir/../upgrade.sh" \
+        V2BX_MANAGER_PATH="$case_dir/bin/V2bX" V2BX_READY_TIMEOUT=3 UPGRADE_PATH="$test_dir/../upgrade.sh" \
         bash "$test_dir/upgrade_runner.sh" > "$case_dir/output.log" 2>&1
     result=$?
     set -e
@@ -58,6 +61,11 @@ for scenario in "${scenarios[@]}"; do
         [[ -f $backup ]]
         cmp "$case_dir/old-binary" "${backup%/*}/V2bX"
         cmp "$case_dir/old-manager" "${backup%/*}/V2bX.sh"
+    elif [[ $scenario == rollback-stop-failure ]]; then
+        [[ $result -ne 0 ]]
+        [[ $(cat "$case_dir/running-version") == new ]]
+        grep -q '自动恢复未成功' "$case_dir/output.log"
+        if grep -q '已恢复升级前版本' "$case_dir/output.log"; then echo 'FAIL: falsely claimed a successful rollback'; exit 1; fi
     else
         [[ $result -ne 0 ]] || { cat "$case_dir/output.log"; echo "FAIL: $scenario unexpectedly succeeded"; exit 1; }
         cmp "$case_dir/old-binary" "$case_dir/install/V2bX"
@@ -69,8 +77,11 @@ for scenario in "${scenarios[@]}"; do
         [[ $(cat "$case_dir/service-state") == 1 ]]
     fi
     if [[ $scenario == symlink-manager ]]; then [[ -L $case_dir/bin/V2bX ]]; fi
-    if [[ $scenario == download-failure || $scenario == checksum-failure || $scenario == concurrent-upgrade ]]; then
+    if [[ $scenario == download-failure || $scenario == checksum-failure || $scenario == concurrent-upgrade || $scenario == legacy-package || $scenario == bad-manager ]]; then
         [[ ! -f $case_dir/service-actions ]] || { echo "FAIL: $scenario stopped the service"; exit 1; }
+    fi
+    if [[ $scenario != rollback-stop-failure && $scenario != success && $scenario != stopped && $scenario != symlink-manager ]]; then
+        [[ $(cat "$case_dir/running-version") == old ]]
     fi
     printf 'PASS: %s (configuration, certificates and geo data unchanged)\n' "$scenario"
 done

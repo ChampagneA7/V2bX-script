@@ -7,11 +7,12 @@ V2BX_INSTALL_DIR=${V2BX_INSTALL_DIR:-/usr/local/V2bX}
 V2BX_CONFIG_DIR=${V2BX_CONFIG_DIR:-/etc/V2bX}
 V2BX_MANAGER_PATH=${V2BX_MANAGER_PATH:-/usr/bin/V2bX}
 V2BX_REPO=ChampagneA7/V2bX
-V2BX_SCRIPT_REPO=ChampagneA7/V2bX-script
+V2BX_READY_TIMEOUT=${V2BX_READY_TIMEOUT:-180}
 stage_dir=''
 backup_dir=''
 lock_dir=''
 upgrade_started=0
+files_may_have_changed=0
 was_active=0
 temporary_files=()
 
@@ -61,6 +62,22 @@ service_start() {
     else rc-service V2bX start; fi
 }
 
+service_pid() {
+    if [[ $service_kind == systemd ]]; then
+        systemctl show --property=MainPID --value V2bX.service
+    else
+        cat /run/V2bX.pid
+    fi
+}
+
+service_is_ready() {
+    local pid status check_timeout=${1:-5}
+    pid=$(service_pid) || return 1
+    [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
+    status=$(timeout "$check_timeout" "$V2BX_INSTALL_DIR/V2bX" check-ready "$pid" 2>/dev/null) || return 1
+    [[ $status == 'V2bX nodes ready' ]]
+}
+
 atomic_install() {
     local source_file=$1 target_file=$2 pending_file
     pending_file=$(mktemp "${target_file}.upgrade.XXXXXXXX") || return 1
@@ -72,7 +89,21 @@ atomic_install() {
 
 restore_previous() {
     printf '\n升级失败，正在恢复旧程序和管理脚本……\n' >&2
-    service_stop >/dev/null 2>&1 || true
+    if [[ $files_may_have_changed -eq 0 ]]; then
+        if [[ $was_active -eq 1 ]] && ! service_is_active; then
+            service_start || return 1
+            service_is_active || return 1
+        fi
+        printf '原程序尚未替换，已保留升级前服务状态。\n' >&2
+        return 0
+    fi
+    if ! service_stop >/dev/null 2>&1; then
+        if service_is_active; then
+            printf '无法停止新版进程，不能确认回滚成功；保留备份供人工恢复。\n' >&2
+            return 1
+        fi
+    fi
+    if service_is_active; then return 1; fi
     atomic_install "$backup_dir/V2bX" "$V2BX_INSTALL_DIR/V2bX" || return 1
     atomic_install "$backup_dir/V2bX.sh" "$V2BX_MANAGER_PATH" || return 1
     if [[ $was_active -eq 1 ]]; then
@@ -107,6 +138,7 @@ main() {
     [[ $# -le 1 ]] || die '用法：bash upgrade.sh [版本号]'
     local requested_version=${1:-latest} command_name expected_digest actual_digest release_url
     [[ -n $requested_version ]] || requested_version=latest
+    [[ $V2BX_READY_TIMEOUT =~ ^[1-9][0-9]{0,3}$ && $V2BX_READY_TIMEOUT -le 3600 ]] || die 'V2BX_READY_TIMEOUT 必须是 1 到 3600 秒。'
     for command_name in curl unzip sha256sum tar mktemp timeout bash; do
         command -v "$command_name" >/dev/null 2>&1 || die "缺少依赖：$command_name；请安装后重试。"
     done
@@ -143,7 +175,9 @@ main() {
     unzip -p "$stage_dir/$asset_name" V2bX > "$stage_dir/V2bX"
     chmod 755 "$stage_dir/V2bX"
     timeout 15 "$stage_dir/V2bX" version > "$stage_dir/version.txt"
-    download_file "https://raw.githubusercontent.com/$V2BX_SCRIPT_REPO/master/V2bX.sh" "$stage_dir/V2bX.sh"
+    # Keep program and manager from the same reviewed, checksummed release.
+    unzip -p "$stage_dir/$asset_name" V2bX.sh > "$stage_dir/V2bX.sh"
+    [[ -s $stage_dir/V2bX.sh ]] || die '此 Release 未包含配套管理脚本；现有服务未停止。'
     bash -n "$stage_dir/V2bX.sh"
 
     mkdir -p -- "$V2BX_INSTALL_DIR/backups"
@@ -156,13 +190,25 @@ main() {
     printf '%s\n' "$was_active" > "$backup_dir/service-was-active.txt"
     upgrade_started=1
     if [[ $was_active -eq 1 ]]; then service_stop; fi
+    files_may_have_changed=1
     atomic_install "$stage_dir/V2bX" "$V2BX_INSTALL_DIR/V2bX"
     atomic_install "$stage_dir/V2bX.sh" "$V2BX_MANAGER_PATH"
     if [[ $was_active -eq 1 ]]; then
         service_start
+        local ready=0 deadline remaining
+        deadline=$((SECONDS + V2BX_READY_TIMEOUT))
+        while (( SECONDS < deadline )); do
+            service_is_active || die '新版服务在初始化期间退出。'
+            remaining=$((deadline - SECONDS))
+            if (( remaining > 5 )); then remaining=5; fi
+            if service_is_ready "$remaining"; then ready=1; break; fi
+            sleep 1
+        done
+        [[ $ready -eq 1 ]] || die '新版未在时限内完成节点初始化。'
         for _ in 1 2 3 4 5; do
             sleep 1
             service_is_active || die '新版服务未保持运行。'
+            service_is_ready || die '新版节点未保持就绪状态。'
         done
     fi
     upgrade_started=0

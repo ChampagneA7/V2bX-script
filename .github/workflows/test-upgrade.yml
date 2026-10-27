@@ -25,4 +25,7 @@ jobs:
         run: |
           for file in upgrade.sh install.sh V2bX.sh tests/*.sh; do bash -n "$file"; done
       - name: Exercise upgrades and rollback with unchanged configuration
-        run: bash tests/upgrade_test.sh
+        run: |
+          bash tests/upgrade_test.sh
+          bash tests/install_guard_test.sh
+          bash tests/readiness_test.sh

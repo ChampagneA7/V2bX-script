@@ -7,29 +7,42 @@ plain='\033[0m'
 
 cur_dir=$(pwd)
 
-# check root
-[[ $EUID -ne 0 ]] && echo -e "${red}错误：${plain} 必须使用root用户运行此脚本！\n" && exit 1
-
-# Existing installations always use the configuration-preserving upgrade path.
-if [[ -x /usr/local/V2bX/V2bX ]]; then
-    upgrade_script=$(mktemp) || exit 1
-    if ! curl -fLsS --retry 3 --connect-timeout 15 --max-time 180 \
-        -o "$upgrade_script" https://raw.githubusercontent.com/ChampagneA7/V2bX-script/master/upgrade.sh; then
-        rm -f "$upgrade_script"
-        echo -e "${red}下载升级脚本失败，现有安装未改动${plain}"
-        exit 1
+require_install_root() {
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${red}错误：${plain} 必须使用root用户运行此脚本！"
+        return 1
     fi
-    if ! bash -n "$upgrade_script"; then
-        rm -f "$upgrade_script"
-        echo -e "${red}升级脚本语法无效，现有安装未改动${plain}"
-        exit 1
-    fi
-    bash "$upgrade_script" "${1:-}"
-    result=$?
-    rm -f "$upgrade_script"
-    exit "$result"
-fi
+}
 
+install_main() {
+    require_install_root || return 1
+    local install_dir=${V2BX_INSTALL_DIR:-/usr/local/V2bX}
+    local config_dir=${V2BX_CONFIG_DIR:-/etc/V2bX}
+    local upgrade_script result
+    # Any existing installation/configuration takes the non-destructive path,
+    # including a damaged/non-executable binary or an incomplete installation.
+    if [[ -e $install_dir || -L $install_dir || -e $config_dir || -L $config_dir ]]; then
+        upgrade_script=$(mktemp) || return 1
+        if ! curl -fLsS --retry 3 --connect-timeout 15 --max-time 180 \
+            -o "$upgrade_script" https://raw.githubusercontent.com/ChampagneA7/V2bX-script/master/upgrade.sh; then
+            rm -f "$upgrade_script"
+            echo -e "${red}下载升级脚本失败，现有安装未改动${plain}"
+            return 1
+        fi
+        if ! bash -n "$upgrade_script"; then
+            rm -f "$upgrade_script"
+            echo -e "${red}升级脚本语法无效，现有安装未改动${plain}"
+            return 1
+        fi
+        bash "$upgrade_script" "${1:-}"
+        result=$?
+        rm -f "$upgrade_script"
+        return "$result"
+    fi
+    install_fresh "$@"
+}
+
+install_fresh() {
 # check os
 if [[ -f /etc/redhat-release ]]; then
     release="centos"
@@ -144,8 +157,9 @@ check_status() {
 }
 
 install_V2bX() {
-    if [[ -e /usr/local/V2bX/ ]]; then
-        rm -rf /usr/local/V2bX/
+    if [[ -e /usr/local/V2bX/ || -L /usr/local/V2bX/ ]]; then
+        echo "检测到已有安装目录，请使用 upgrade.sh；未删除任何文件。"
+        return 1
     fi
 
     mkdir /usr/local/V2bX/ -p
@@ -308,3 +322,6 @@ EOF
 echo -e "${green}开始安装${plain}"
 install_base
 install_V2bX $1
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then install_main "$@"; fi
