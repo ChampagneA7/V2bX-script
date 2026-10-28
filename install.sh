@@ -7,6 +7,26 @@ plain='\033[0m'
 
 cur_dir=$(pwd)
 
+required_install_commands=(curl wget unzip tar socat)
+
+missing_install_commands() {
+    local command_name
+    for command_name in "${required_install_commands[@]}"; do
+        command -v "$command_name" >/dev/null 2>&1 || printf '%s\n' "$command_name"
+    done
+}
+
+verify_install_dependencies() {
+    local missing
+    missing=$(missing_install_commands)
+    if [[ -n $missing ]]; then
+        echo -e "${red}安装依赖失败，以下命令仍不可用：${plain}"
+        printf '%s\n' "$missing"
+        echo -e "${yellow}请检查系统软件源或网络后重新运行安装脚本。${plain}"
+        return 1
+    fi
+}
+
 require_install_root() {
     if [[ $EUID -ne 0 ]]; then
         echo -e "${red}错误：${plain} 必须使用root用户运行此脚本！"
@@ -157,39 +177,54 @@ check_status() {
 }
 
 install_V2bX() {
+    local archive last_version url
     if [[ -e /usr/local/V2bX/ || -L /usr/local/V2bX/ ]]; then
         echo "检测到已有安装目录，请使用 upgrade.sh；未删除任何文件。"
         return 1
     fi
 
-    mkdir /usr/local/V2bX/ -p
-    cd /usr/local/V2bX/
+    archive=$(mktemp "${TMPDIR:-/tmp}/V2bX-linux.XXXXXXXX") || return 1
 
     if  [ $# == 0 ] ;then
         last_version=$(curl -fLsS "https://api.github.com/repos/ChampagneA7/V2bX/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
         if [[ ! -n "$last_version" ]]; then
             echo -e "${red}检测 V2bX 版本失败，可能是超出 Github API 限制，请稍后再试，或手动指定 V2bX 版本安装${plain}"
-            exit 1
+            rm -f -- "$archive"
+            return 1
         fi
         echo -e "检测到 V2bX 最新版本：${last_version}，开始安装"
-        wget -N --progress=bar -O /usr/local/V2bX/V2bX-linux.zip https://github.com/ChampagneA7/V2bX/releases/download/${last_version}/V2bX-linux-${arch}.zip
+        wget -N --progress=bar -O "$archive" https://github.com/ChampagneA7/V2bX/releases/download/${last_version}/V2bX-linux-${arch}.zip
         if [[ $? -ne 0 ]]; then
             echo -e "${red}下载 V2bX 失败，请确保你的服务器能够下载 Github 的文件${plain}"
-            exit 1
+            rm -f -- "$archive"
+            return 1
         fi
     else
         last_version=$1
         url="https://github.com/ChampagneA7/V2bX/releases/download/${last_version}/V2bX-linux-${arch}.zip"
         echo -e "开始安装 V2bX $1"
-        wget -N --progress=bar -O /usr/local/V2bX/V2bX-linux.zip ${url}
+        wget -N --progress=bar -O "$archive" "$url"
         if [[ $? -ne 0 ]]; then
             echo -e "${red}下载 V2bX $1 失败，请确保此版本存在${plain}"
-            exit 1
+            rm -f -- "$archive"
+            return 1
         fi
     fi
 
-    unzip V2bX-linux.zip
-    rm V2bX-linux.zip -f
+    if ! unzip -tq "$archive" >/dev/null 2>&1; then
+        echo -e "${red}下载的 V2bX ZIP 包无效或已损坏${plain}"
+        rm -f -- "$archive"
+        return 1
+    fi
+    mkdir /usr/local/V2bX/ -p
+    if ! unzip -q "$archive" -d /usr/local/V2bX/; then
+        echo -e "${red}解压 V2bX ZIP 包失败，未保留半安装目录${plain}"
+        rm -f -- "$archive"
+        rm -rf -- /usr/local/V2bX
+        return 1
+    fi
+    rm -f -- "$archive"
+    cd /usr/local/V2bX/
     chmod +x V2bX
     mkdir /etc/V2bX/ -p
     cp geoip.dat /etc/V2bX/
@@ -321,7 +356,8 @@ EOF
 
 echo -e "${green}开始安装${plain}"
 install_base
-install_V2bX $1
+verify_install_dependencies || exit 1
+install_V2bX "$@" || exit 1
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then install_main "$@"; fi

@@ -57,6 +57,7 @@ wget -N https://raw.githubusercontent.com/ChampagneA7/V2bX-script/master/install
 for file in upgrade.sh V2bX.sh install.sh tests/*.sh; do bash -n "$file"; done
 bash tests/upgrade_test.sh
 bash tests/install_guard_test.sh
+bash tests/install_dependency_test.sh
 bash tests/readiness_test.sh
 ```
 
